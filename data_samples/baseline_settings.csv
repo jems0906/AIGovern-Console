@@ -1,0 +1,4 @@
+platform,name,setting,approved_value,observed_value,rationale,owner
+claude,Project visibility,project_visibility,private,private,Least privilege for project knowledge,Maya Patel
+chatgpt,Workspace sharing,workspace_sharing,workspace_only,public,External publishing requires explicit approval,Lena Ortiz
+copilot,Agent sharing scope,agent_sharing_scope,security_group,organization,Limit agent exposure to approved groups,Ava Chen

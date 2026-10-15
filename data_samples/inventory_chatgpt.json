@@ -1,0 +1,5 @@
+[
+  {"external_id":"chatgpt-search","name":"SharePoint Knowledge","kind":"connector","owner":"Lena Ortiz","version":"1.0"},
+  {"external_id":"chatgpt-custom-gpt","name":"Claims Triage GPT","kind":"custom_gpt","owner":"Noah Kim","version":"1.2"},
+  {"external_id":"chatgpt-shadow-plugin","name":"Self-service Analytics","kind":"plugin","owner":"Unknown","version":"1.0"}
+]

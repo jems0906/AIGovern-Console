@@ -1,0 +1,5 @@
+[
+  {"external_id":"copilot-search","name":"Operations Knowledge Connector","kind":"connector","owner":"Ava Chen","version":"1.0"},
+  {"external_id":"copilot-workspace-agent","name":"Operations Workspace Agent","kind":"agent","owner":"Evan Brooks","version":"0.9"},
+  {"external_id":"copilot-shadow-extension","name":"Vendor Preview Extension","kind":"extension","owner":"Unknown","version":"0.1"}
+]

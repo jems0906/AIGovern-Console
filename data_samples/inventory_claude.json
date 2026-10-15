@@ -1,0 +1,5 @@
+[
+  {"external_id":"claude-search","name":"Enterprise Knowledge Search","kind":"connector","owner":"Maya Patel","version":"1.0"},
+  {"external_id":"claude-project-agent","name":"Research Workspace Agent","kind":"agent","owner":"Evan Brooks","version":"1.0"},
+  {"external_id":"claude-policy-skill","name":"Policy Summary","kind":"skill","owner":"Maya Patel","version":"2.1"}
+]

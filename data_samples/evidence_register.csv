@@ -1,0 +1,5 @@
+platform,name,artifact_type,reference,expires_at,owner,obligations,control_change,posture_impact,status
+claude,Synthetic security certification,certification,DEMO-CLAUDE-CERT-001,2027-06-01,Maya Patel,,,,approved
+chatgpt,Synthetic data processing agreement,dpa,DEMO-OPENAI-DPA-001,2027-05-01,Lena Ortiz,,,,approved
+copilot,Synthetic vendor control notice,vendor_control_change,DEMO-MS-CONTROL-001,2027-04-01,Ava Chen,,New agent sharing option,Reassess organization-wide sharing,pending
+claude,Synthetic BAA obligations,baa,DEMO-BAA-001,2026-09-01,Maya Patel,No PHI until legal approval and contractual verification,,,expired

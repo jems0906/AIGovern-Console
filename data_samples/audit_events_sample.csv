@@ -1,0 +1,7 @@
+platform,external_id,timestamp,actor,action,target,outcome
+claude,claude-001,2026-10-14T09:10:00Z,maya@example.test,connector.enabled,claude-search,success
+claude,claude-002,2026-10-14T10:20:00Z,evan@example.test,project.visibility_changed,research-project,success
+chatgpt,chatgpt-001,2026-10-14T11:30:00Z,lena@example.test,workspace.sharing_updated,workspace-demo,success
+chatgpt,chatgpt-002,2026-10-14T12:00:00Z,noah@example.test,gpt.created,chatgpt-custom-gpt,success
+copilot,copilot-001,2026-10-14T13:15:00Z,ava@example.test,CopilotInteraction,operations-knowledge,success
+copilot,copilot-002,2026-10-14T14:10:00Z,evan@example.test,AgentPublished,copilot-workspace-agent,success

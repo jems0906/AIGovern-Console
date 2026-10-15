@@ -1,0 +1,35 @@
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: aigovern
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in your environment}
+      POSTGRES_DB: aigovern
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U aigovern"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    environment:
+      DATABASE_URL: postgresql+psycopg://aigovern:${POSTGRES_PASSWORD}@postgres:5432/aigovern
+      ENVIRONMENT: production
+      ADMIN_API_KEY: ${ADMIN_API_KEY:?Set ADMIN_API_KEY with at least 32 characters}
+    depends_on:
+      postgres:
+        condition: service_healthy
+  frontend:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+    ports:
+      - "8080:8080"
+    depends_on:
+      - backend
+volumes:
+  postgres_data:
