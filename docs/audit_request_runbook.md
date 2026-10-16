@@ -14,14 +14,18 @@
 | configuration | Baseline, sharing, and retention state known as of the end date |
 | entitlements | Allowlist, sources, Skills, and snapshots known as of the end date |
 | changes | Change request state known as of the end date |
-| evidence | Evidence register references known as of the end date, not binary artifacts |
+| evidence | Evidence register state known as of the end date |
+| evidence_files | Attachment metadata, upload actor, file size, timestamp, and SHA-256 |
+| artifacts/ | Attached files uploaded by the end date, scoped to the platform and tenant |
 | governance_activity | Before/after history within the inclusive date range |
 | audit_events | Normalized events within the date range, present in state known as of the end date |
 | manifest.json | Scope, generated time/actor, semantics, file checksums |
 
 An event imported after the selected end date is not part of that historical knowledge state, even if its source timestamp is earlier. Use an end date covering ingestion when packaging newly loaded historical samples, or explicitly describe the evidence cutoff to the auditor. Initial records created after the requested end date do not appear. No current-state fallback silently substitutes for missing historical evidence.
 
-CSV cells beginning with spreadsheet formula prefixes are escaped. Nested data is JSON encoded inside CSV cells. All resources are tenant/platform scoped. No evidence attachments are fetched or embedded; the register stores references only. Never distribute bearer credentials with the bundle.
+CSV cells beginning with spreadsheet formula prefixes are escaped. Nested data is JSON encoded inside CSV cells. All resources and attachments are tenant/platform scoped. Attached files are packaged under sanitized, unique names and included in the manifest's checksums. Downloads and export verify stored digests and reject integrity mismatches. External document-reference URLs are not fetched automatically. Never distribute bearer credentials with the bundle.
+
+Evidence detail views support file upload and download. Allowed extensions are PDF, TXT, JSON, CSV, PNG, JPG, and JPEG, with a 5 MB per-file limit. Empty files are rejected. Files are stored in PostgreSQL rather than ephemeral container storage; uploads append immutable attachment metadata and audit history. Duplicate bytes within one evidence record are rejected. Do not upload secrets or unnecessary personal data. Attached files are not malware-scanned or legally authenticated; handle them as untrusted documents and follow the organization's review procedure.
 
 ## Import Contract
 

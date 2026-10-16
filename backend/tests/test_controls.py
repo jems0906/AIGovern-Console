@@ -93,3 +93,44 @@ def test_production_keys_are_enforced(monkeypatch):
     with pytest.raises(HTTPException) as exc:
         security.identity("Bearer invalid")
     assert exc.value.status_code == 401
+
+
+def test_evidence_file_roundtrip_and_scoped_package(client):
+    evidence = create(client, "evidence", artifact_type="dpa", reference="SYNTHETIC-DPA")
+    other = create(client, "evidence", artifact_type="certification", reference="SYNTHETIC-CERT")
+    content = b"Synthetic agreement; not a real legal document"
+    endpoint = f"/api/evidence/{evidence['id']}/artifacts"
+    uploaded = client.post(endpoint, files={"file": ("../../agreement.txt", content)})
+    assert uploaded.status_code == 201, uploaded.text
+    artifact = uploaded.json()
+    assert artifact["filename"] == "agreement.txt"
+    assert artifact["sha256"] == hashlib.sha256(content).hexdigest()
+    assert client.get(endpoint).json()["items"][0]["id"] == artifact["id"]
+    downloaded = client.get(f"{endpoint}/{artifact['id']}")
+    assert downloaded.content == content
+    assert downloaded.headers["x-content-sha256"] == artifact["sha256"]
+    assert client.get(f"/api/evidence/{other['id']}/artifacts/{artifact['id']}").status_code == 404
+    assert client.post(endpoint, files={"file": ("duplicate.txt", content)}).status_code == 409
+    for tenant, end, included in [("test", "2099-01-01", True), ("other", "2099-01-01", False), ("test", "2020-01-02", False)]:
+        response = client.get("/api/evidence/export/package", params={"platform": "claude", "tenant": tenant, "start": "2020-01-01", "end": end})
+        with zipfile.ZipFile(io.BytesIO(response.content)) as archive:
+            paths = [path for path in archive.namelist() if path.startswith("artifacts/")]
+            assert bool(paths) is included
+            if included:
+                assert archive.read(paths[0]) == content
+                manifest = json.loads(archive.read("manifest.json"))
+                assert manifest["sha256"][paths[0]] == artifact["sha256"]
+
+
+def test_evidence_file_limits_and_viewer_access(client):
+    from app.main import app
+    from app.security import identity
+
+    evidence = create(client, "evidence", artifact_type="certification", reference="SYNTHETIC-CERT")
+    endpoint = f"/api/evidence/{evidence['id']}/artifacts"
+    assert client.post(endpoint, files={"file": ("script.html", b"<script>test</script>")}).status_code == 422
+    assert client.post(endpoint, files={"file": ("empty.txt", b"")}).status_code == 422
+    assert client.post(endpoint, files={"file": ("big.pdf", b"x" * 5_000_001)}).status_code == 413
+    app.dependency_overrides[identity] = lambda: {"actor": "viewer", "role": "viewer"}
+    assert client.get(endpoint).status_code == 200
+    assert client.post(endpoint, files={"file": ("file.txt", b"synthetic")}).status_code == 403

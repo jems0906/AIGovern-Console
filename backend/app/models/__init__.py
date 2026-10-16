@@ -1,7 +1,7 @@
 from datetime import datetime, timezone
 from uuid import uuid4
 
-from sqlalchemy import JSON, DateTime, Integer, String, UniqueConstraint
+from sqlalchemy import JSON, DateTime, ForeignKey, Integer, LargeBinary, String, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.database import Base
@@ -38,3 +38,16 @@ class GovernanceEvent(Base):
     before: Mapped[dict] = mapped_column(JSON)
     after: Mapped[dict] = mapped_column(JSON)
     timestamp: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
+
+
+class EvidenceArtifact(Base):
+    __tablename__ = "evidence_artifacts"
+    __table_args__ = (UniqueConstraint("evidence_id", "sha256", name="uq_evidence_artifact_digest"),)
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    evidence_id: Mapped[str] = mapped_column(ForeignKey("records.id"), index=True)
+    filename: Mapped[str] = mapped_column(String(180))
+    sha256: Mapped[str] = mapped_column(String(64))
+    size_bytes: Mapped[int] = mapped_column(Integer)
+    content: Mapped[bytes] = mapped_column(LargeBinary, deferred=True)
+    uploaded_by: Mapped[str] = mapped_column(String(120))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)

@@ -1,0 +1,11 @@
+{
+  "name": "aigovern-infrastructure",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "infra:plan": "railway config plan"
+  },
+  "devDependencies": {
+    "railway": "3.16.0"
+  }
+}
