@@ -1,9 +1,10 @@
 const base = (import.meta.env.VITE_API_URL || '').replace(/\/$/, '')
+import { entraAccessToken } from './entra'
 
 export async function api(path, options = {}) {
   const { credential, ...requestOptions } = options
   const headers = new Headers(requestOptions.headers)
-  const token = credential ?? sessionStorage.getItem('aigovern-token')
+  const token = credential ?? await entraAccessToken()
   if (token) headers.set('Authorization', `Bearer ${token}`)
   if (requestOptions.body && !(requestOptions.body instanceof FormData)) headers.set('Content-Type', 'application/json')
   const response = await fetch(`${base}/api${path}`, { ...requestOptions, headers })

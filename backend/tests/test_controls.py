@@ -88,11 +88,93 @@ def test_production_keys_are_enforced(monkeypatch):
     from fastapi import HTTPException
     from app import security
 
-    monkeypatch.setattr(security, "get_settings", lambda: SimpleNamespace(environment="production", admin_api_key="admin-test", reviewer_api_key="review-test", viewer_api_key="view-test"))
+    monkeypatch.setattr(security, "get_settings", lambda: SimpleNamespace(environment="production", auth_mode="api_key", admin_api_key="admin-test", reviewer_api_key="review-test", viewer_api_key="view-test"))
     assert security.identity("Bearer view-test")["role"] == "viewer"
     with pytest.raises(HTTPException) as exc:
         security.identity("Bearer invalid")
     assert exc.value.status_code == 401
+
+
+@pytest.mark.parametrize("entra_role,expected_role", [
+    ("AIGovern.Admin", "admin"),
+    ("AIGovern.Reviewer", "reviewer"),
+    ("AIGovern.Viewer", "viewer"),
+])
+def test_entra_access_token_signature_audience_and_role(monkeypatch, entra_role, expected_role):
+    from datetime import datetime, timedelta, timezone
+    from types import SimpleNamespace
+
+    import jwt
+    from cryptography.hazmat.primitives.asymmetric import rsa
+    from fastapi import HTTPException
+    from app import security
+
+    tenant_id = "11111111-1111-4111-8111-111111111111"
+    client_id = "22222222-2222-4222-8222-222222222222"
+    signing_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    settings = SimpleNamespace(
+        auth_mode="entra", environment="production", entra_tenant_id=tenant_id,
+        entra_api_client_id=client_id, entra_api_audience=client_id, entra_admin_role="AIGovern.Admin",
+        entra_reviewer_role="AIGovern.Reviewer", entra_viewer_role="AIGovern.Viewer",
+    )
+
+    class StubJwks:
+        def get_signing_key_from_jwt(self, token):
+            return SimpleNamespace(key=signing_key.public_key())
+
+    monkeypatch.setattr(security, "get_settings", lambda: settings)
+    monkeypatch.setattr(security, "_jwks_client", lambda _: StubJwks())
+    claims = {
+        "iss": f"https://login.microsoftonline.com/{tenant_id}/v2.0",
+        "aud": client_id,
+        "tid": tenant_id,
+        "oid": "33333333-3333-4333-8333-333333333333",
+        "roles": [entra_role],
+        "iat": datetime.now(timezone.utc),
+        "exp": datetime.now(timezone.utc) + timedelta(minutes=5),
+    }
+    token = jwt.encode(claims, signing_key, algorithm="RS256", headers={"kid": "test-key"})
+    identity = security.identity(f"Bearer {token}")
+    assert identity["role"] == expected_role
+    assert identity["actor"] == f"entra:{tenant_id}:{claims['oid']}"
+
+    claims["aud"] = "another-api"
+    wrong_audience = jwt.encode(claims, signing_key, algorithm="RS256", headers={"kid": "test-key"})
+    with pytest.raises(HTTPException) as exc:
+        security.identity(f"Bearer {wrong_audience}")
+    assert exc.value.status_code == 401
+
+    claims["aud"] = client_id
+    claims["roles"] = ["Unassigned.Role"]
+    unassigned_role = jwt.encode(claims, signing_key, algorithm="RS256", headers={"kid": "test-key"})
+    with pytest.raises(HTTPException) as exc:
+        security.identity(f"Bearer {unassigned_role}")
+    assert exc.value.status_code == 403
+
+
+def test_entra_mode_fails_closed_without_registration(monkeypatch):
+    from types import SimpleNamespace
+    from fastapi import HTTPException
+    from app import security
+
+    monkeypatch.setattr(security, "get_settings", lambda: SimpleNamespace(auth_mode="entra", entra_tenant_id="", entra_api_client_id=""))
+    with pytest.raises(HTTPException) as exc:
+        security.identity("Bearer token")
+    assert exc.value.status_code == 503
+
+
+def test_auth_config_exposes_only_public_entra_settings(client, monkeypatch):
+    from types import SimpleNamespace
+    from app.api.routes import health
+
+    monkeypatch.setattr(health, "get_settings", lambda: SimpleNamespace(
+        auth_mode="entra", entra_tenant_id="tenant-guid", entra_spa_client_id="spa-guid",
+        entra_api_scope="api://resource/access", admin_api_key="never-expose-this",
+    ))
+    response = client.get("/api/auth/config")
+    assert response.status_code == 200
+    assert response.json() == {"mode": "entra", "tenant_id": "tenant-guid", "spa_client_id": "spa-guid", "api_scope": "api://resource/access"}
+    assert "admin_api_key" not in response.json()
 
 
 def test_evidence_file_roundtrip_and_scoped_package(client):

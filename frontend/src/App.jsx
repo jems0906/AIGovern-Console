@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Activity, LayoutDashboard, ListChecks, Boxes, BookOpen, Share2, Database, Flag, SlidersHorizontal, GitPullRequest, Files, Archive, Search, ShieldAlert, RefreshCw, Download, Plus, Upload, Menu, X, KeyRound, LogOut, ChevronRight, ShieldCheck } from 'lucide-react'
 import { api, allRecords, normalizeCredential } from './api/client'
+import { loadAuthConfig, signInWithMicrosoft, signOutMicrosoft } from './api/entra'
 import { platforms, resources, label } from './config'
 import Table from './components/Table'
 import Dialog from './components/Dialog'
@@ -23,6 +24,7 @@ export default function App() {
   const [status, setStatus] = useState('all')
   const [data, setData] = useState(emptyData)
   const [session, setSession] = useState(null)
+  const [authConfig, setAuthConfig] = useState(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
@@ -55,8 +57,22 @@ export default function App() {
       setReload((count) => count + 1)
     } finally { setAuthBusy(false) }
   }
+  async function connectMicrosoft() {
+    setAuthBusy(true)
+    setAuthError('')
+    try {
+      await signInWithMicrosoft()
+      await api('/session')
+      setModal(null)
+      setReload((count) => count + 1)
+    } catch (exception) {
+      setAuthError(exception.message)
+      setReload((count) => count + 1)
+    } finally { setAuthBusy(false) }
+  }
   function signOut() {
     sessionStorage.removeItem('aigovern-token')
+    signOutMicrosoft().catch(() => {})
     setToken('')
     setAuthError('')
     setModal(null)
@@ -66,6 +82,11 @@ export default function App() {
     const handler = () => { const next = window.location.hash.slice(1); if (resources[next] || next === 'overview') { setPage(next); setQuery(''); setStatus('all') } }
     window.addEventListener('hashchange', handler)
     return () => window.removeEventListener('hashchange', handler)
+  }, [])
+  useEffect(() => {
+    let active = true
+    loadAuthConfig().then((config) => { if (active) setAuthConfig(config) }).catch(() => {})
+    return () => { active = false }
   }, [])
   useEffect(() => {
     let active = true
@@ -103,6 +124,6 @@ export default function App() {
     {modal?.type === 'detail' && <Detail resource={modal.resource} record={modal.record} canWrite={canWrite} onClose={() => setModal(null)} onEdit={() => setModal({ ...modal, type: 'form' })} />}
     {modal?.type === 'import' && <ImportDialog resource={page} platform={platform} tenant={tenant} onClose={() => setModal(null)} onSaved={saved} />}
     {modal?.type === 'export' && <ExportDialog platform={platform} tenant={tenant} onClose={() => setModal(null)} />}
-    {modal?.type === 'auth' && <Dialog title="Workspace Credentials" onClose={() => setModal(null)}><form onSubmit={connect}><div className="dialog-body"><label>Railway API key<input autoFocus autoComplete="off" placeholder="Paste ADMIN_API_KEY; Bearer prefix optional" type="password" value={token} onChange={(event) => setToken(event.target.value)} /></label><p className="muted">Retrieve ADMIN_API_KEY from the Railway backend Variables. The key is kept only for this browser tab.</p>{authError && <div className="form-error" role="alert">{authError}</div>}{session && <p className="muted">Session: {session.actor}</p>}</div><footer><button type="button" className="button" onClick={signOut}><LogOut size={16} />Sign out</button><button type="submit" className="button primary" disabled={authBusy}><KeyRound size={16} />{authBusy ? 'Checking…' : 'Connect'}</button></footer></form></Dialog>}
+    {modal?.type === 'auth' && <Dialog title="Workspace Sign In" onClose={() => setModal(null)}>{authConfig?.mode === 'entra' ? <div><div className="dialog-body"><p>Sign in with your organization account. Access is based on your assigned AIGovern application role.</p>{authError && <div className="form-error" role="alert">{authError}</div>}</div><footer><button type="button" className="button" onClick={signOut}><LogOut size={16} />Sign out</button><button type="button" className="button primary" disabled={authBusy} onClick={connectMicrosoft}><KeyRound size={16} />{authBusy ? 'Signing in…' : 'Sign in with Microsoft'}</button></footer></div> : <form onSubmit={connect}><div className="dialog-body"><label>Railway API key<input autoFocus autoComplete="off" placeholder="Paste ADMIN_API_KEY; Bearer prefix optional" type="password" value={token} onChange={(event) => setToken(event.target.value)} /></label><p className="muted">Retrieve ADMIN_API_KEY from the Railway backend Variables. The key is kept only for this browser tab.</p>{authError && <div className="form-error" role="alert">{authError}</div>}{session && <p className="muted">Session: {session.actor}</p>}</div><footer><button type="button" className="button" onClick={signOut}><LogOut size={16} />Sign out</button><button type="submit" className="button primary" disabled={authBusy}><KeyRound size={16} />{authBusy ? 'Checking…' : 'Connect'}</button></footer></form>}</Dialog>}
   </div>
 }

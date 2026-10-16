@@ -1,3 +1,4 @@
+import asyncio
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
@@ -9,6 +10,7 @@ from app.api.crud import resource_router
 from app.api.routes import allowlist, audit_logs, aup_incidents, baseline, changes, datasources, evidence, health, inventory, rollout, sharing, skills
 from app.config import get_settings
 from app.database import Base, engine
+from app.ingestion.vendor_feeds import vendor_feed_loop
 
 
 @asynccontextmanager
@@ -16,15 +18,25 @@ async def lifespan(app: FastAPI):
     settings = get_settings()
     if settings.environment not in {"development", "production", "test"}:
         raise RuntimeError("ENVIRONMENT must be development, test, or production")
-    if settings.environment == "production" and len(settings.admin_api_key) < 32:
-        raise RuntimeError("Production requires ADMIN_API_KEY with at least 32 characters")
+    if settings.environment == "production":
+        if settings.auth_mode == "api_key" and len(settings.admin_api_key) < 32:
+            raise RuntimeError("Production API-key mode requires ADMIN_API_KEY with at least 32 characters")
+        if settings.auth_mode == "entra" and not all((settings.entra_tenant_id, settings.entra_spa_client_id, settings.entra_api_client_id, settings.entra_api_audience, settings.entra_api_scope)):
+            raise RuntimeError("Production Entra mode requires tenant, SPA/API client IDs, API audience, and API scope")
     if settings.environment == "development":
         Base.metadata.create_all(engine)
+    feed_task = asyncio.create_task(vendor_feed_loop()) if settings.vendor_feeds_enabled else None
     yield
+    if feed_task:
+        feed_task.cancel()
+        try:
+            await feed_task
+        except asyncio.CancelledError:
+            pass
 
 
 app = FastAPI(title="AIGovern Console", version="1.0.0", lifespan=lifespan,
-              description="Governance system of record. Imports simulate vendor feeds; no vendor settings are changed.")
+              description="Governance system of record. Optional vendor audit feeds are disabled by default and do not change vendor settings.")
 app.add_middleware(CORSMiddleware, allow_origins=get_settings().cors_origins.split(","),
                    allow_methods=["GET", "POST", "PATCH"], allow_headers=["Authorization", "Content-Type"])
 

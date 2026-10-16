@@ -9,6 +9,17 @@ from app.security import identity
 router = APIRouter()
 
 
+@router.get("/auth/config", tags=["session"])
+def auth_config():
+    settings = get_settings()
+    return {
+        "mode": settings.auth_mode,
+        "tenant_id": settings.entra_tenant_id if settings.auth_mode == "entra" else "",
+        "spa_client_id": settings.entra_spa_client_id if settings.auth_mode == "entra" else "",
+        "api_scope": settings.entra_api_scope if settings.auth_mode == "entra" else "",
+    }
+
+
 @router.get("/health", tags=["health"])
 def health(db: Session = Depends(get_db)):
     db.execute(text("SELECT 1"))

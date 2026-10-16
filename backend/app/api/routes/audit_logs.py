@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 from app.database import get_db
 from app.ingestion import chatgpt_compliance, claude_audit, purview_audit
 from app.ingestion.normalizer import NormalizedEvent, load_upload
+from app.ingestion.vendor_feeds import feed_source_status
 from app.models import GovernanceEvent, Record
 from app.schemas import Platform
 from app.security import identity, require_write
@@ -78,3 +79,8 @@ def history(platform: str | None = None, tenant: str | None = None, record_id: s
     return {"items": [{"id": item.id, "record_id": item.record_id, "resource": item.resource, "platform": item.platform,
                        "tenant": item.tenant, "actor": item.actor, "action": item.action, "before": item.before,
                        "after": item.after, "timestamp": item.timestamp.isoformat()} for item in db.scalars(query.limit(1000))]}
+
+
+@router.get("/sources")
+def sources(db: Session = Depends(get_db), user: dict = Depends(identity)):
+    return {"items": feed_source_status(db)}

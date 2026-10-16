@@ -38,7 +38,19 @@ npm run dev -- --port 5173
 
 Open **http://127.0.0.1:5173**. API documentation: **http://127.0.0.1:8000/docs**. Health: `/api/health`. The development seed is idempotent and never overwrites an existing demo tenant. Linux uses `.venv/bin/python` instead of `.venv/Scripts/python.exe`.
 
-Without `ADMIN_API_KEY`, development grants an explicitly labeled local-demo admin session. Bind it to localhost only. Production refuses to start without a 32-character admin credential. Set `ENVIRONMENT=production`, `DATABASE_URL`, and credential variables through your deployment secret manager, not committed files. Enter credentials through the console's key button. Browser credentials live in session storage and are removed on sign-out.
+Without `ADMIN_API_KEY`, development grants an explicitly labeled local-demo admin session. Bind it to localhost only. Production defaults to API-key mode and requires a 32-character admin credential. Entra OIDC is available as an opt-in production mode after its app registration and roles are configured. Set environment variables through your deployment secret manager, not committed files.
+
+### Microsoft Entra Sign-In
+
+The API validates Microsoft Entra access-token signature, tenant-specific issuer, expiry, API audience, tenant ID, and assigned app role. It maps `AIGovern.Admin`, `AIGovern.Reviewer`, and `AIGovern.Viewer` to console permissions. The browser uses MSAL and requests an API access token; a client ID alone is not sufficient.
+
+1. In Entra, configure a **single-tenant** app registration for the API. Expose a delegated API scope (for example `api://<API_CLIENT_ID>/AIGovern.Access`) and define app roles with values `AIGovern.Admin`, `AIGovern.Reviewer`, and `AIGovern.Viewer`, allowed for users/groups.
+2. Add a **Single-page application** platform redirect URI exactly matching `https://frontend-production-033cb.up.railway.app`. Add `http://localhost:5173` for local development. Do not create a browser client secret.
+3. Assign users/groups to the API app roles. Grant tenant consent for the delegated API scope. The same registration may serve as SPA and API; if separate registrations are used, set their IDs independently.
+4. Set the following backend Railway variables only after testing the registered configuration: `AUTH_MODE=entra`, `ENTRA_TENANT_ID`, `ENTRA_SPA_CLIENT_ID`, `ENTRA_API_CLIENT_ID`, `ENTRA_API_AUDIENCE` (must exactly match the access token's `aud` claim), and `ENTRA_API_SCOPE` (the full exposed scope URI). Never set Entra mode with placeholder IDs. Restart/deploy the backend and frontend after variables and redirect URIs are configured.
+5. Confirm the public `/api/auth/config` response contains only public IDs/scope (never credentials), the Microsoft login popup returns a token for this API, role claims produce the expected role, and unassigned users receive 403. Keep `ADMIN_API_KEY` available only as a controlled rollback until the sign-in change is accepted; then rotate/remove it according to your access policy.
+
+The current deployment remains in API-key mode until the real tenant GUID and app registration IDs are configured. Do not send client secrets, tokens, or the Railway admin key in chat.
 
 ## Implemented Scope
 
@@ -52,7 +64,7 @@ Without `ADMIN_API_KEY`, development grants an explicitly labeled local-demo adm
 | Rollout | Four ordered phase gates, required entry and reassessment checks, completion retrospective |
 | Baselines and changes | Approved/observed settings, rationale, ownership, scheduled change state machine, rollback requirements, transactional baseline application and rollback, before/after history |
 | Compliance evidence | Retention decisions, certification/DPA/BAA references and attached files, checksum verification, obligations, expiry and vendor-control impact |
-| Audit simulation | Claude, ChatGPT and Purview adapters; deduplication; normalized event search, filters and dates |
+| Audit ingestion | Claude Activity Feed, OpenAI Compliance Logs, and Microsoft 365 Management Activity feed adapters; cursor/overlap polling, deduplication, normalized event search, filters, and source status |
 | Audit packages | Historical configuration, entitlements, changes, evidence, activity and normalized logs as CSV/JSON ZIP with checksum manifest |
 | Acceptable use | Incident categories, severity, Information Security escalation references and resolution |
 | Delivery | Migrations, Dockerfiles, Compose PostgreSQL, Railway configs, CI, unit/API/browser tests, synthetic data and six operating documents |
@@ -66,6 +78,16 @@ React calls `/api` through Vite locally and nginx in containers. FastAPI routes 
 This shared record model keeps the many small governance registers consistent without duplicating CRUD implementations. Indexed resource, tenant, and platform columns provide scope; JSON payloads preserve platform-specific detail. Listing/search currently filters bounded governance datasets in application memory. Large enterprise feeds should add database-side JSON filtering, retention/partitioning, background ingestion, and streaming exports.
 
 `backend/app/api/routes/` owns each requested module. `governance/` owns workflow, diff, drift, and rollout rules. `ingestion/` owns vendor normalization. `scripts/` contains seeding and a synthetic inventory generator. `docs/` contains the operating policy, change procedure, rollout playbook, acceptable-use standard, retention decision guide, and audit runbook.
+
+### Live Vendor Audit Feeds
+
+Feed polling is disabled unless `VENDOR_FEEDS_ENABLED=true`. When enabled, the backend polls configured sources every five minutes by default, stores only normalized event fields, deduplicates by vendor event ID, and persists per-source cursors/checkpoints in PostgreSQL. `GET /api/audit_logs/sources` reports configuration and last-sync status without exposing credentials. Failed syncs leave the last successful checkpoint unchanged and show a sanitized error class. Review backend logs for operational details.
+
+- Anthropic: set `ANTHROPIC_COMPLIANCE_API_KEY` with `read:compliance_activities` and a display label in `ANTHROPIC_COMPLIANCE_TENANT`. The poller queries the Activity Feed with a configurable overlap window.
+- OpenAI: set `OPENAI_COMPLIANCE_API_KEY` to an eligible ChatGPT Enterprise/Edu Compliance API key, `OPENAI_COMPLIANCE_PRINCIPAL_ID` to the workspace or organization ID, and select comma-separated `OPENAI_COMPLIANCE_EVENT_TYPES`. The poller downloads listed logs; it does not use the retired stateful endpoint.
+- Microsoft 365: register a confidential Entra application with admin-consented `ActivityFeed.Read` application permission and set `O365_TENANT_ID`, `O365_CLIENT_ID`, `O365_CLIENT_SECRET`, and `O365_PUBLISHER_ID`. Set `O365_CONTENT_TYPES` as needed. The app starts subscriptions before polling, which can take up to 12 hours to produce the first content. Microsoft content is retrievable for seven days; an older checkpoint is flagged instead of silently advanced.
+
+Keep these credentials in Railway Variables or another secret manager. Do not paste them into this repository or chat. Configure each vendor's access and permission before enabling polling. No vendor feed or tenant access is active in the current production deployment.
 
 ## Tests
 
@@ -111,12 +133,12 @@ Cloud resources incur workspace usage charges. Backups/restore drills, budget al
 
 ## Security and Deliberate Boundaries
 
-- This is a governance system of record with simulated audit ingestion, not live tenant enforcement. No vendor credentials are requested and no connector is actually enabled by this application.
+- This is a governance system of record, not live tenant enforcement. Vendor audit polling is opt-in and has no credentials in the current deployment; it does not change vendor policies, connectors, or approvals.
 - Production role credentials are shared role identities, not per-person SSO. They authorize all tenants. Add OIDC/SAML-backed identities, tenant-level authorization, separation of duties, and signed approval evidence before regulated use.
 - Evidence files are persisted in PostgreSQL, limited to 5 MB each and approved document/image extensions, delivered only as authenticated downloads, and included in scoped packages with SHA-256 checksums. Uploaded bytes are untrusted: files are not malware-scanned, legally validated, or rendered inline. Review presence checks cannot verify that a legal document, certification, ACL test, or approval is authentic. Add malware scanning before allowing untrusted external submitters.
 - Incident escalation is recorded, not sent to an external service. Approved retention positions do not automatically configure vendors or delete console data.
 - Application history has no edit/delete API but is not a WORM store. Export checksums are integrity aids, not signatures. Use approved external immutable storage and release controls.
-- Audit adapters implement the supplied synthetic shapes, not complete vendor contracts. Validate real feeds and licensing against current documentation before connecting production data.
+- Feed adapters support the documented Anthropic Activity Feed, OpenAI Compliance Logs, and Microsoft 365 Management Activity API shapes. Validate vendor licensing, tenant consent, access scope, and data handling before enabling production ingestion.
 - Demo names, approvals, legal references, and positions are synthetic and do not establish compliance.
 
 Read the [governance policy](docs/governance_operating_policy.md) and [audit runbook](docs/audit_request_runbook.md) before operating the console.
