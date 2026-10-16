@@ -25,14 +25,18 @@ async function entraClient(config) {
     throw new Error('Microsoft Entra sign-in is not fully configured')
   }
   if (!clientPromise) {
-    clientPromise = PublicClientApplication.createPublicClientApplication({
-      auth: {
-        clientId: config.spa_client_id,
-        authority: `https://login.microsoftonline.com/${config.tenant_id}`,
-        redirectUri: window.location.origin,
-      },
-      cache: { cacheLocation: 'sessionStorage' },
-    }).catch((error) => {
+    clientPromise = (async () => {
+      const client = new PublicClientApplication({
+        auth: {
+          clientId: config.spa_client_id,
+          authority: `https://login.microsoftonline.com/${config.tenant_id}`,
+          redirectUri: window.location.origin,
+        },
+        cache: { cacheLocation: 'sessionStorage' },
+      })
+      await client.initialize()
+      return client
+    })().catch((error) => {
       clientPromise = undefined
       throw error
     })
