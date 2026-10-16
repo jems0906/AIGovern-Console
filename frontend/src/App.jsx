@@ -62,12 +62,8 @@ export default function App() {
     setAuthError('')
     try {
       await signInWithMicrosoft()
-      await api('/session')
-      setModal(null)
-      setReload((count) => count + 1)
     } catch (exception) {
       setAuthError(exception.message)
-      setReload((count) => count + 1)
     } finally { setAuthBusy(false) }
   }
   function signOut() {

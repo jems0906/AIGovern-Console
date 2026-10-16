@@ -35,6 +35,8 @@ async function entraClient(config) {
         cache: { cacheLocation: 'sessionStorage' },
       })
       await client.initialize()
+      const response = await client.handleRedirectPromise()
+      if (response?.account) client.setActiveAccount(response.account)
       return client
     })().catch((error) => {
       clientPromise = undefined
@@ -68,10 +70,7 @@ export async function signInWithMicrosoft() {
   const config = await loadAuthConfig()
   const client = await entraClient(config)
   if (!client) throw new Error('Microsoft Entra sign-in is not enabled for this deployment')
-  const response = await client.loginPopup({ scopes: [config.api_scope] })
-  if (response.account) client.setActiveAccount(response.account)
-  if (!response.accessToken) throw new Error('Microsoft Entra did not return an API access token')
-  return response.accessToken
+  await client.loginRedirect({ scopes: [config.api_scope] })
 }
 
 export async function signOutMicrosoft() {
@@ -79,5 +78,5 @@ export async function signOutMicrosoft() {
   if (config.mode !== 'entra') return
   const client = await entraClient(config)
   const account = client.getActiveAccount()
-  if (account) await client.logoutPopup({ account, postLogoutRedirectUri: window.location.origin })
+  if (account) await client.logoutRedirect({ account, postLogoutRedirectUri: window.location.origin })
 }
