@@ -1,16 +1,21 @@
 const base = (import.meta.env.VITE_API_URL || '').replace(/\/$/, '')
 
 export async function api(path, options = {}) {
-  const headers = new Headers(options.headers)
-  const token = sessionStorage.getItem('aigovern-token')
+  const { credential, ...requestOptions } = options
+  const headers = new Headers(requestOptions.headers)
+  const token = credential ?? sessionStorage.getItem('aigovern-token')
   if (token) headers.set('Authorization', `Bearer ${token}`)
-  if (options.body && !(options.body instanceof FormData)) headers.set('Content-Type', 'application/json')
-  const response = await fetch(`${base}/api${path}`, { ...options, headers })
+  if (requestOptions.body && !(requestOptions.body instanceof FormData)) headers.set('Content-Type', 'application/json')
+  const response = await fetch(`${base}/api${path}`, { ...requestOptions, headers })
   if (!response.ok) {
     const error = await response.json().catch(() => ({}))
     throw new Error(typeof error.detail === 'string' ? error.detail : JSON.stringify(error.detail || `Request failed (${response.status})`))
   }
-  return options.blob ? response.blob() : response.json()
+  return requestOptions.blob ? response.blob() : response.json()
+}
+
+export function normalizeCredential(value) {
+  return value.trim().replace(/^Bearer\s+/i, '').trim()
 }
 
 export async function allRecords(resource, filters = {}) {

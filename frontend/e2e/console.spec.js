@@ -53,3 +53,33 @@ test('mobile navigation and layout remain usable', async ({ page }) => {
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true)
   await page.screenshot({ path: 'test-results/inventory-mobile.png', fullPage: true, animations: 'disabled' })
 })
+
+test('credential dialog normalizes Bearer prefixes and keeps rejected keys editable', async ({ page }) => {
+  await page.goto('/')
+  await expect(page.locator('.loading-state')).toHaveCount(0)
+  let authorization = ''
+  await page.route('**/api/session', async (route) => {
+    const header = route.request().headers().authorization || ''
+    if (header) authorization = header
+    if (authorization === 'Bearer invalid-test-key') {
+      await route.fulfill({ status: 401, contentType: 'application/json', body: JSON.stringify({ detail: 'Valid bearer credential required' }) })
+      return
+    }
+    await route.continue()
+  })
+
+  await page.getByRole('button', { name: 'Credentials' }).click()
+  const dialog = page.getByRole('dialog')
+  const credential = page.getByLabel('Railway API key')
+  await credential.fill('Bearer invalid-test-key')
+  await page.getByRole('button', { name: 'Connect' }).click()
+  await expect(dialog.getByText('Valid bearer credential required')).toBeVisible()
+  await expect(dialog).toBeVisible()
+  expect(authorization).toBe('Bearer invalid-test-key')
+
+  await credential.fill('Bearer valid-test-key')
+  await page.getByRole('button', { name: 'Connect' }).click()
+  await expect(dialog).not.toBeVisible()
+  expect(await page.evaluate(() => sessionStorage.getItem('aigovern-token'))).toBe('valid-test-key')
+  expect(authorization).toBe('Bearer valid-test-key')
+})

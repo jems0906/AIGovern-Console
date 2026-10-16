@@ -1,8 +1,14 @@
 import { describe, expect, it } from 'vitest'
+import { normalizeCredential } from './api/client'
 import { cleanRecord, defaults } from './config'
 import { summarize } from './pages/Overview'
 
 describe('governance form data', () => {
+  it('accepts either a raw API key or a Bearer header value', () => {
+    expect(normalizeCredential('  secret-key  ')).toBe('secret-key')
+    expect(normalizeCredential('Bearer secret-key')).toBe('secret-key')
+    expect(normalizeCredential('bearer secret-key')).toBe('secret-key')
+  })
   it('starts every capability submitted without a risk review', () => {
     expect(defaults('allowlist')).toMatchObject({ status: 'submitted', risk_review: null, workspace_agent: false })
   })
