@@ -1,7 +1,7 @@
 import { test, expect } from '@playwright/test'
 import { entryCriteria, phases, reassessment } from '../src/config'
 
-test('deployed production governance workflows and responsive UI', async ({ page, request, context }) => {
+test('deployed production governance workflows and responsive UI', async ({ page, request }) => {
   test.skip(!process.env.AIGOVERN_DEPLOYMENT_URL || !process.env.AIGOVERN_DEPLOYMENT_TOKEN, 'Requires an explicit deployment URL and credential')
   test.setTimeout(120000)
   const token = process.env.AIGOVERN_DEPLOYMENT_TOKEN
@@ -78,9 +78,12 @@ test('deployed production governance workflows and responsive UI', async ({ page
   expect((await bundle.body()).subarray(0, 2).toString()).toBe('PK')
   await patch('allowlist', capability, { status: 'retired' })
 
-  const origin = new URL(process.env.AIGOVERN_DEPLOYMENT_URL).origin
-  await context.addInitScript(({ token, origin }) => { if (location.origin === origin) sessionStorage.setItem('aigovern-token', token) }, { token, origin })
   await page.goto('/')
+  await expect(page.getByRole('alert').getByText('Valid bearer credential required')).toBeVisible()
+  await page.locator('.topbar-right').getByRole('button', { name: 'Credentials' }).click()
+  await page.getByLabel('Railway API key').fill(`Bearer ${token}`)
+  await page.getByRole('button', { name: 'Connect', exact: true }).click()
+  await expect(page.getByRole('dialog')).not.toBeVisible()
   await expect(page.getByText('Connected to governance API')).toBeVisible()
   await page.getByLabel('Tenant', { exact: true }).fill(tenant)
   await page.getByRole('button', { name: 'Apply tenant', exact: true }).click()
