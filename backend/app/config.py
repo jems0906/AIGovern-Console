@@ -24,6 +24,8 @@ class Settings(BaseSettings):
     entra_admin_role: str = "AIGovern.Admin"
     entra_reviewer_role: str = "AIGovern.Reviewer"
     entra_viewer_role: str = "AIGovern.Viewer"
+    entra_audit_enabled: bool = False
+    entra_audit_client_secret: str = ""
     vendor_feeds_enabled: bool = False
     vendor_sync_interval_seconds: int = Field(default=300, ge=60, le=86400)
     vendor_sync_overlap_seconds: int = Field(default=3600, ge=0, le=604800)
@@ -55,6 +57,20 @@ class Settings(BaseSettings):
                 raise ValueError(f"AUTH_MODE=entra requires: {', '.join(missing)}")
             for name, value in (("ENTRA_TENANT_ID", self.entra_tenant_id),
                                 ("ENTRA_SPA_CLIENT_ID", self.entra_spa_client_id),
+                                ("ENTRA_API_CLIENT_ID", self.entra_api_client_id)):
+                if not _is_guid(value):
+                    raise ValueError(f"{name} must be a valid GUID")
+
+        if self.entra_audit_enabled:
+            required = {
+                "ENTRA_TENANT_ID": self.entra_tenant_id,
+                "ENTRA_API_CLIENT_ID": self.entra_api_client_id,
+                "ENTRA_AUDIT_CLIENT_SECRET": self.entra_audit_client_secret,
+            }
+            missing = [name for name, value in required.items() if not value]
+            if missing:
+                raise ValueError(f"ENTRA_AUDIT_ENABLED requires: {', '.join(missing)}")
+            for name, value in (("ENTRA_TENANT_ID", self.entra_tenant_id),
                                 ("ENTRA_API_CLIENT_ID", self.entra_api_client_id)):
                 if not _is_guid(value):
                     raise ValueError(f"{name} must be a valid GUID")

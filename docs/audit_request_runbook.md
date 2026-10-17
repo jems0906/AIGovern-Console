@@ -31,6 +31,20 @@ Evidence detail views support file upload and download. Allowed extensions are P
 
 Manual files must be UTF-8 CSV or JSON arrays (or `items`/`events` envelopes), at most 5 MB and 10,000 rows. Imports are validated before writes. Duplicate audit events use platform + tenant + vendor event ID and are skipped. Reusing an ID with changed content does not overwrite an event; investigate upstream identity issues. Live polling has separate per-source checkpoints, overlap windows, pagination, retry handling, and a 50 MB per-download limit; Microsoft 365 content is only retrievable within seven days. Investigate a source status of `error` before relying on completeness.
 
-Inventory rows: `external_id`, `name`, `kind`, optional `owner` and `version`. Audit normalized rows: `external_id`, `timestamp` with timezone, `actor`, `action`, `target`, optional `outcome`. The three vendor-shaped JSON samples exercise the manual upload normalizers. Live feed integration supports Anthropic's Compliance Activity Feed, OpenAI's Compliance Logs API, and Microsoft's Office 365 Management Activity API. Confirm vendor eligibility, contractual access, tenant consent, configured scopes, and source completeness before enabling production polling.
+Inventory rows: `external_id`, `name`, `kind`, optional `owner` and `version`. Audit normalized rows: `external_id`, `timestamp` with timezone, `actor`, `action`, `target`, optional `outcome`. The vendor-shaped JSON samples exercise the manual upload normalizers. Live feed integration supports Anthropic's Compliance Activity Feed, OpenAI's Compliance Logs API, Microsoft's Office 365 Management Activity API, and Microsoft Entra directory audits. Confirm vendor eligibility, contractual access, tenant consent, configured scopes, and source completeness before enabling production polling.
+
+## Entra Directory Audit Feed
+
+The Entra source reads `GET /v1.0/auditLogs/directoryAudits` through Microsoft Graph. Microsoft Entra Free retains up to seven days of audit logs; this source does not include the Microsoft 365 Unified Audit Log for Exchange, SharePoint, or Copilot activity. The backend API app needs the Microsoft Graph **Application** permission `AuditLog.Read.All` with administrator consent.
+
+Keep `ENTRA_AUDIT_ENABLED` false while provisioning. Use the existing `ENTRA_TENANT_ID` and `ENTRA_API_CLIENT_ID`, create a server-side credential for that API app, and store its value as `ENTRA_AUDIT_CLIENT_SECRET` directly in Railway. Never add the credential to the SPA, repository, or chat. Do not set `VENDOR_FEEDS_ENABLED` for this source; Anthropic, OpenAI, and Office 365 polling use that separate switch.
+
+After granting consent and configuring the Railway secret, run one limited sync from the backend container while recurring polling remains disabled:
+
+```sh
+python -c "import asyncio; from app.ingestion.vendor_feeds import sync_entra_audits; print('Imported:', asyncio.run(sync_entra_audits()))"
+```
+
+Verify the imported rows with `GET /api/audit_logs?platform=entra` and confirm `GET /api/audit_logs/sources` reports the Entra checkpoint as successful and disabled. Only after verification, set `ENTRA_AUDIT_ENABLED=true` to start recurring polling. The poll interval uses `VENDOR_SYNC_INTERVAL_SECONDS` (default 300 seconds).
 
 The mixed-platform sample CSV is intended for the seed script. Split it by platform before manual imports; a mismatched row is rejected to prevent silent misattribution.

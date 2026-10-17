@@ -1,5 +1,6 @@
 import asyncio
 import json
+from typing import get_args
 
 import httpx
 import pytest
@@ -11,11 +12,13 @@ from sqlalchemy.pool import StaticPool
 from app.config import Settings
 from app.database import Base
 from app.ingestion.claude_audit import normalize as normalize_claude
+from app.ingestion.entra_audit import normalize as normalize_entra
 from app.ingestion.normalizer import NormalizedEvent
 from app.ingestion.purview_audit import normalize as normalize_purview
 from app.ingestion import vendor_feeds
 from app.ingestion.vendor_feeds import normalize_openai_event
 from app.models import Record
+from app.schemas import Platform
 
 
 def test_entra_auth_mode_rejects_non_guid_tenant_id():
@@ -69,6 +72,118 @@ def test_o365_activity_feed_normalizes_office_audit_fields():
     assert normalized.external_id == "event_1"
     assert normalized.action == "FileDownloaded"
     assert normalized.target == "file_1"
+
+
+def test_entra_directory_audit_normalizes_user_and_target_fields():
+    normalized = NormalizedEvent.model_validate(normalize_entra({
+        "id": "audit_1", "activityDateTime": "2026-10-14T09:10:00Z",
+        "activityDisplayName": "Add member to group", "result": "success",
+        "initiatedBy": {"user": {"userPrincipalName": "admin@example.test"}},
+        "targetResources": [{"displayName": "Test Group", "type": "Group"}],
+    }))
+    assert normalized.external_id == "audit_1"
+    assert normalized.actor == "admin@example.test"
+    assert normalized.action == "Add member to group"
+    assert normalized.target == "Test Group"
+
+
+def test_entra_audit_feed_is_disabled_independently_by_default():
+    settings = Settings()
+    assert settings.entra_audit_enabled is False
+    assert settings.vendor_feeds_enabled is False
+    assert "entra" in get_args(Platform)
+
+
+def test_entra_audit_source_status_stays_disabled_when_credentials_are_configured():
+    engine = create_engine("sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool)
+    Base.metadata.create_all(engine)
+    test_sessions = sessionmaker(bind=engine, expire_on_commit=False)
+    settings = Settings(entra_tenant_id="c47223e5-7cd5-41ad-89cb-44bf0d65e9ba",
+                        entra_api_client_id="a1be7e43-c591-4890-b1f5-62c4d15092f3",
+                        entra_audit_client_secret="test-secret")
+
+    with test_sessions() as db:
+        status = next(item for item in vendor_feeds.feed_source_status(db, settings)
+                      if item["platform"] == "entra")
+
+    assert status["configured"] is True
+    assert status["enabled"] is False
+    assert status["status"] == "disabled"
+    assert "secret" not in status
+    engine.dispose()
+
+
+def test_entra_audit_feed_requires_backend_credentials_when_enabled():
+    with pytest.raises(ValidationError, match="ENTRA_AUDIT_ENABLED requires"):
+        Settings(entra_audit_enabled=True,
+                 entra_tenant_id="c47223e5-7cd5-41ad-89cb-44bf0d65e9ba",
+                 entra_api_client_id="a1be7e43-c591-4890-b1f5-62c4d15092f3")
+
+
+def test_entra_audit_one_shot_sync_pages_and_deduplicates_without_enabling_polling(monkeypatch):
+    engine = create_engine("sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool)
+    Base.metadata.create_all(engine)
+    test_sessions = sessionmaker(bind=engine, expire_on_commit=False)
+    monkeypatch.setattr(vendor_feeds, "SessionLocal", test_sessions)
+    graph_calls = []
+    event_one = {
+        "id": "audit_1", "activityDateTime": "2026-10-14T09:10:00Z",
+        "activityDisplayName": "Add member to group", "result": "success",
+        "initiatedBy": {"user": {"userPrincipalName": "admin@example.test"}},
+        "targetResources": [{"displayName": "Test Group", "type": "Group"}],
+    }
+    event_two = {
+        "id": "audit_2", "activityDateTime": "2026-10-14T09:11:00Z",
+        "activityDisplayName": "Update application", "result": "success",
+        "initiatedBy": {"app": {"displayName": "Deployment App", "appId": "app-1"}},
+        "targetResources": [{"id": "app-1", "type": "Application"}],
+    }
+
+    async def fake_request(client, method, url, *, headers, params=None, data=None, json_body=None):
+        if url.endswith("/oauth2/v2.0/token"):
+            assert data["scope"] == "https://graph.microsoft.com/.default"
+            return httpx.Response(200, json={"access_token": "test-token"}, request=httpx.Request(method, url))
+        graph_calls.append(url)
+        if "skiptoken=next" in url:
+            return httpx.Response(200, json={"value": [event_two]}, request=httpx.Request(method, url))
+        return httpx.Response(200, json={"value": [event_one],
+                                         "@odata.nextLink": "https://graph.microsoft.com/v1.0/auditLogs/directoryAudits?skiptoken=next"},
+                              request=httpx.Request(method, url))
+
+    monkeypatch.setattr(vendor_feeds, "_request", fake_request)
+    settings = Settings(entra_tenant_id="c47223e5-7cd5-41ad-89cb-44bf0d65e9ba",
+                        entra_api_client_id="a1be7e43-c591-4890-b1f5-62c4d15092f3",
+                        entra_audit_client_secret="test-secret")
+    assert settings.entra_audit_enabled is False
+
+    assert asyncio.run(vendor_feeds.sync_entra_audits(settings)) == 2
+    assert asyncio.run(vendor_feeds.sync_entra_audits(settings)) == 0
+
+    with test_sessions() as db:
+        records = list(db.scalars(select(Record).where(Record.resource == "audit_logs")))
+        checkpoint = db.scalar(select(Record).where(Record.resource == "vendor_feed_states",
+                                                  Record.platform == "entra"))
+    assert len(graph_calls) == 4
+    assert {record.data["external_id"] for record in records} == {"audit_1", "audit_2"}
+    assert checkpoint.data["status"] == "ok"
+    assert all(record.data["platform"] == "entra" for record in records)
+    engine.dispose()
+
+
+def test_entra_audit_sync_rejects_untrusted_next_link(monkeypatch):
+    async def fake_request(client, method, url, *, headers, params=None, data=None, json_body=None):
+        if url.endswith("/oauth2/v2.0/token"):
+            return httpx.Response(200, json={"access_token": "test-token"}, request=httpx.Request(method, url))
+        return httpx.Response(200, json={"value": [],
+                                         "@odata.nextLink": "https://attacker.example/auditLogs/directoryAudits"},
+                              request=httpx.Request(method, url))
+
+    monkeypatch.setattr(vendor_feeds, "_request", fake_request)
+    settings = Settings(entra_tenant_id="c47223e5-7cd5-41ad-89cb-44bf0d65e9ba",
+                        entra_api_client_id="a1be7e43-c591-4890-b1f5-62c4d15092f3",
+                        entra_audit_client_secret="test-secret")
+    with pytest.raises(vendor_feeds.VendorFeedError, match="untrusted directory-audit URL"):
+        asyncio.run(vendor_feeds.sync_entra_audits(settings))
 
 
 def test_openai_poll_persists_checkpoint_and_deduplicates(monkeypatch):

@@ -1,4 +1,4 @@
-export const platforms = { claude: 'Claude', chatgpt: 'ChatGPT Enterprise', copilot: 'Microsoft 365 Copilot' }
+export const platforms = { claude: 'Claude', chatgpt: 'ChatGPT Enterprise', copilot: 'Microsoft 365 Copilot', entra: 'Microsoft Entra ID' }
 export const kinds = ['connector', 'app', 'plugin', 'extension', 'agent', 'custom_gpt', 'skill']
 export const phases = ['core', 'intelligence', 'integrations', 'automation_agents']
 export const entryCriteria = {

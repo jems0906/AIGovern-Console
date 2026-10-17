@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 
 from app.config import Settings, get_settings
 from app.database import SessionLocal
-from app.ingestion import chatgpt_compliance, claude_audit, purview_audit
+from app.ingestion import chatgpt_compliance, claude_audit, entra_audit, purview_audit
 from app.ingestion.normalizer import NormalizedEvent
 from app.models import Record
 from app.services import log_event
@@ -22,6 +22,7 @@ MAX_PAGES = 1000
 MAX_EVENTS_PER_SYNC = 50000
 MAX_CONTENT_BYTES = 50_000_000
 O365_HOSTS = {"manage.office.com"}
+GRAPH_HOSTS = {"graph.microsoft.com"}
 
 
 class VendorFeedError(Exception):
@@ -171,16 +172,23 @@ def _csv_values(value: str) -> list[str]:
 
 def _configured_sources(settings: Settings) -> list[dict]:
     sources = [{"platform": "claude", "source": "activities", "tenant": settings.anthropic_compliance_tenant,
-                "configured": bool(settings.anthropic_compliance_api_key and settings.anthropic_compliance_tenant)}]
+                "configured": bool(settings.anthropic_compliance_api_key and settings.anthropic_compliance_tenant),
+                "enabled": settings.vendor_feeds_enabled}]
     sources.extend({"platform": "chatgpt", "source": f"event_type:{event_type}",
                     "tenant": settings.openai_compliance_principal_id,
-                    "configured": bool(settings.openai_compliance_api_key and settings.openai_compliance_principal_id)}
+                    "configured": bool(settings.openai_compliance_api_key and settings.openai_compliance_principal_id),
+                    "enabled": settings.vendor_feeds_enabled}
                    for event_type in _csv_values(settings.openai_compliance_event_types))
     sources.extend({"platform": "copilot", "source": f"content_type:{content_type}",
                     "tenant": settings.o365_tenant_id,
                     "configured": bool(settings.o365_tenant_id and settings.o365_client_id and settings.o365_client_secret
-                                        and settings.o365_publisher_id)}
+                                        and settings.o365_publisher_id),
+                    "enabled": settings.vendor_feeds_enabled}
                    for content_type in _csv_values(settings.o365_content_types))
+    sources.append({"platform": "entra", "source": "directoryAudits", "tenant": settings.entra_tenant_id,
+                    "configured": bool(settings.entra_tenant_id and settings.entra_api_client_id
+                                       and settings.entra_audit_client_secret),
+                    "enabled": settings.entra_audit_enabled})
     return sources
 
 
@@ -190,9 +198,14 @@ def feed_source_status(db: Session, settings: Settings | None = None) -> list[di
     for source in _configured_sources(settings):
         record = _checkpoint(db, source["platform"], source["tenant"], source["source"]) if source["tenant"] else None
         data = record.data if record else {}
+        status = data.get("status")
+        if not status:
+            status = "not_configured" if not source["configured"] else "waiting"
+            if source["platform"] == "entra" and not source["enabled"]:
+                status = "disabled"
         items.append({"platform": source["platform"], "source": source["source"],
-                      "configured": source["configured"], "enabled": settings.vendor_feeds_enabled,
-                      "status": data.get("status", "not_configured" if not source["configured"] else "waiting"),
+                      "configured": source["configured"], "enabled": source["enabled"],
+                      "status": status,
                       "last_success_at": data.get("last_success_at"), "last_error": data.get("last_error", "")})
     return items
 
@@ -331,6 +344,88 @@ async def _sync_o365(client: httpx.AsyncClient, settings: Settings, content_type
         logger.warning("Vendor feed sync failed: platform=%s source=%s error=%s", platform, content_type, type(exc).__name__)
 
 
+def _trusted_graph_url(value: str) -> str:
+    parsed = urlsplit(value)
+    if (parsed.scheme != "https" or parsed.hostname not in GRAPH_HOSTS or parsed.port not in (None, 443)
+            or parsed.username or parsed.password or not parsed.path.startswith("/v1.0/auditLogs/directoryAudits")):
+        raise VendorFeedError("Microsoft Graph returned an untrusted directory-audit URL")
+    return value
+
+
+async def _sync_entra_audits(client: httpx.AsyncClient, settings: Settings, token: str) -> int:
+    platform, tenant, source = "entra", settings.entra_tenant_id, "directoryAudits"
+    with SessionLocal() as db:
+        state = _checkpoint(db, platform, tenant, source)
+        previous_cursor = (state.data or {}).get("cursor") if state else None
+
+    now = _utc_now()
+    if previous_cursor:
+        prior = datetime.fromisoformat(previous_cursor.replace("Z", "+00:00"))
+        if now - prior > timedelta(days=7):
+            raise VendorFeedError("Entra audit checkpoint is outside the seven-day retention window")
+        start = prior - timedelta(seconds=settings.vendor_sync_overlap_seconds)
+    else:
+        start = now - timedelta(hours=settings.vendor_initial_lookback_hours)
+
+    next_url = "https://graph.microsoft.com/v1.0/auditLogs/directoryAudits"
+    params = {"$filter": f"activityDateTime ge {_iso(start)}", "$orderby": "activityDateTime asc", "$top": "100"}
+    headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
+    total = 0
+    events_seen = 0
+    for _ in range(MAX_PAGES):
+        page = await _request(client, "GET", _trusted_graph_url(next_url), headers=headers, params=params)
+        params = None
+        payload = page.json()
+        if not isinstance(payload, dict) or not isinstance(payload.get("value"), list):
+            raise VendorFeedError("Microsoft Graph returned an unsupported directory-audit page")
+        rows = payload["value"]
+        if not all(isinstance(row, dict) for row in rows):
+            raise VendorFeedError("Microsoft Graph returned an invalid directory-audit event")
+        events_seen += len(rows)
+        if events_seen > MAX_EVENTS_PER_SYNC:
+            raise VendorFeedError("Entra audit feed exceeded the event limit")
+        total += _store_events(platform, tenant, rows, entra_audit.normalize, "vendor-feed:entra")
+        next_url = payload.get("@odata.nextLink")
+        if not next_url:
+            break
+        next_url = _trusted_graph_url(next_url)
+    else:
+        raise VendorFeedError("Entra audit feed exceeded the page limit")
+
+    _save_checkpoint(platform, tenant, source, _iso(now))
+    logger.info("Entra audit sync complete: imported=%d", total)
+    return total
+
+
+async def sync_entra_audits(settings: Settings | None = None) -> int:
+    """Run one Entra audit sync, even while recurring polling is disabled."""
+    settings = settings or get_settings()
+    if not settings.entra_tenant_id or not settings.entra_api_client_id or not settings.entra_audit_client_secret:
+        raise VendorFeedError("Entra audit feed credentials are not configured")
+    platform, tenant, source = "entra", settings.entra_tenant_id, "directoryAudits"
+    timeout = httpx.Timeout(30, connect=10)
+    try:
+        async with httpx.AsyncClient(timeout=timeout, follow_redirects=False) as client:
+            token_response = await _request(
+                client, "POST",
+                f"https://login.microsoftonline.com/{tenant}/oauth2/v2.0/token",
+                headers={"Content-Type": "application/x-www-form-urlencoded"},
+                data={"client_id": settings.entra_api_client_id,
+                      "client_secret": settings.entra_audit_client_secret,
+                      "grant_type": "client_credentials",
+                      "scope": "https://graph.microsoft.com/.default"},
+            )
+            token = token_response.json().get("access_token")
+            if not token:
+                raise VendorFeedError("Microsoft Entra token response omitted an access token")
+            return await _sync_entra_audits(client, settings, token)
+    except Exception as exc:
+        _save_checkpoint(platform, tenant, source, None, type(exc).__name__)
+        if isinstance(exc, VendorFeedError):
+            raise
+        raise VendorFeedError("Entra audit sync failed") from exc
+
+
 async def sync_configured_vendors(settings: Settings | None = None) -> None:
     settings = settings or get_settings()
     if not settings.vendor_feeds_enabled:
@@ -370,4 +465,15 @@ async def vendor_feed_loop() -> None:
             raise
         except Exception as exc:
             logger.warning("Vendor feed poll failed: error=%s", type(exc).__name__)
+        await asyncio.sleep(get_settings().vendor_sync_interval_seconds)
+
+
+async def entra_audit_loop() -> None:
+    while True:
+        try:
+            await sync_entra_audits()
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.warning("Entra audit poll failed: error=%s", type(exc).__name__)
         await asyncio.sleep(get_settings().vendor_sync_interval_seconds)

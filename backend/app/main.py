@@ -10,7 +10,7 @@ from app.api.crud import resource_router
 from app.api.routes import allowlist, audit_logs, aup_incidents, baseline, changes, datasources, evidence, health, inventory, rollout, sharing, skills
 from app.config import get_settings
 from app.database import Base, engine
-from app.ingestion.vendor_feeds import vendor_feed_loop
+from app.ingestion.vendor_feeds import entra_audit_loop, vendor_feed_loop
 
 
 @asynccontextmanager
@@ -25,9 +25,13 @@ async def lifespan(app: FastAPI):
             raise RuntimeError("Production Entra mode requires tenant, SPA/API client IDs, API audience, and API scope")
     if settings.environment == "development":
         Base.metadata.create_all(engine)
-    feed_task = asyncio.create_task(vendor_feed_loop()) if settings.vendor_feeds_enabled else None
+    feed_tasks = []
+    if settings.vendor_feeds_enabled:
+        feed_tasks.append(asyncio.create_task(vendor_feed_loop()))
+    if settings.entra_audit_enabled:
+        feed_tasks.append(asyncio.create_task(entra_audit_loop()))
     yield
-    if feed_task:
+    for feed_task in feed_tasks:
         feed_task.cancel()
         try:
             await feed_task

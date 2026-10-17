@@ -8,7 +8,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.ingestion import chatgpt_compliance, claude_audit, purview_audit
+from app.ingestion import chatgpt_compliance, claude_audit, entra_audit, purview_audit
 from app.ingestion.normalizer import NormalizedEvent, load_upload
 from app.ingestion.vendor_feeds import feed_source_status
 from app.models import GovernanceEvent, Record
@@ -17,7 +17,8 @@ from app.security import identity, require_write
 from app.services import log_event, records_for, serialize
 
 router = APIRouter(prefix="/audit_logs", tags=["audit logs"])
-NORMALIZERS = {"claude": claude_audit.normalize, "chatgpt": chatgpt_compliance.normalize, "copilot": purview_audit.normalize}
+NORMALIZERS = {"claude": claude_audit.normalize, "chatgpt": chatgpt_compliance.normalize,
+               "copilot": purview_audit.normalize, "entra": entra_audit.normalize}
 
 
 @router.post("/ingest", status_code=201)
